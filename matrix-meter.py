@@ -38,12 +38,13 @@ def format_speed(bps):
 
 
 class Column:
-    TRAIL_FADE_LEVELS = 5  # Move constant to class level
+    TRAIL_FADE_LEVELS = 5
 
     def __init__(self, x, height):
         self.x = x
         self.height = height
-        self.last_positions = set()  # Track positions that need to be cleared
+        self.trail_chars = []  # Store characters for each position in the trail
+        self.trail_timers = []  # Track when each character should change
         self.reset()
 
     def reset(self):
@@ -60,7 +61,9 @@ class Column:
             self.y = -self.trail
         else:
             self.y = self.height + self.trail
-        self.last_positions.clear()
+        # Initialize trail characters and timers
+        self.trail_chars = [random.choice(CHARS) for _ in range(self.trail)]
+        self.trail_timers = [0 for _ in range(self.trail)]
 
     def update(self):
         if not self.active:
@@ -83,15 +86,27 @@ class Column:
             return True
         return True
 
+    def update_chars(self):
+        if not self.active:
+            return
+        # Head always changes
+        self.trail_chars[0] = random.choice(CHARS)
+        # Update trail characters based on their position
+        for i in range(1, self.trail):
+            self.trail_timers[i] += 1
+            # Change probability decreases with distance from head
+            if random.random() < (1.0 / (i + 1)):
+                self.trail_chars[i] = random.choice(CHARS)
+                self.trail_timers[i] = 0
+
     def cleanup(self, stdscr):
         # Clear only the positions that were previously occupied
-        for y in self.last_positions:
+        for y in range(self.y, self.y + self.trail):
             if 0 <= y < self.height:
                 try:
                     stdscr.addstr(y, self.x, " ")
                 except curses.error:
                     pass
-        self.last_positions.clear()
 
     def draw(self, stdscr, color_index):
         if not self.active:
@@ -100,31 +115,30 @@ class Column:
         # Clear previous positions
         self.cleanup(stdscr)
 
-        # Track new positions
-        new_positions = set()
+        # Draw visible trail
         trail_color = curses.color_pair(color_index + 1)
         head_color = curses.color_pair(color_index + 11)
 
-        # Draw visible trail
         for i in range(self.trail):
             offset = i if self.direction == "down" else -i
             y = self.y - offset if self.direction == "down" else self.y + offset
             if 0 <= y < self.height:
-                new_positions.add(y)
-                char = random.choice(CHARS)
+                char = self.trail_chars[i]
                 attr = curses.A_BOLD if random.random() < 0.1 else 0
-                fade = max(0, self.TRAIL_FADE_LEVELS - i) / self.TRAIL_FADE_LEVELS
+                # Reverse fade calculation for upward streams
+                fade_i = i if self.direction == "down" else self.trail - 1 - i
+                fade = (
+                    max(0, Column.TRAIL_FADE_LEVELS - fade_i) / Column.TRAIL_FADE_LEVELS
+                )
                 color = (
                     head_color
-                    if i == 0
+                    if fade_i == 0
                     else trail_color | (curses.A_BOLD if fade > 0.66 else curses.A_DIM)
                 )
                 try:
                     stdscr.addstr(y, self.x, char, color | attr)
                 except curses.error:
                     pass
-
-        self.last_positions = new_positions
 
 
 def main(stdscr):
@@ -215,6 +229,7 @@ def main(stdscr):
 
             for col in columns:
                 col.update()
+                col.update_chars()  # Update characters before drawing
                 if col.active:
                     color_index = (
                         download_color_index
@@ -233,7 +248,7 @@ def main(stdscr):
                             else col.y + offset
                         )
                         if 0 <= y < height:
-                            char = random.choice(CHARS)
+                            char = col.trail_chars[i]
                             attr = curses.A_BOLD if random.random() < 0.1 else 0
                             # Reverse fade calculation for upward streams
                             fade_i = i if col.direction == "down" else col.trail - 1 - i
