@@ -235,13 +235,15 @@ def main(stdscr):
                         if 0 <= y < height:
                             char = random.choice(CHARS)
                             attr = curses.A_BOLD if random.random() < 0.1 else 0
+                            # Reverse fade calculation for upward streams
+                            fade_i = i if col.direction == "down" else col.trail - 1 - i
                             fade = (
-                                max(0, Column.TRAIL_FADE_LEVELS - i)
+                                max(0, Column.TRAIL_FADE_LEVELS - fade_i)
                                 / Column.TRAIL_FADE_LEVELS
                             )
                             color = (
                                 head_color
-                                if i == 0
+                                if fade_i == 0
                                 else trail_color
                                 | (curses.A_BOLD if fade > 0.66 else curses.A_DIM)
                             )
