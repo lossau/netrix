@@ -328,7 +328,7 @@ def main(stdscr):
                 if now - startup_message_start_time >= STARTUP_MESSAGE_DURATION:
                     startup_message_visible = False
 
-            if now - last_check >= 0.5:
+            if now - last_check >= 1:
                 recv, sent = get_network_io(interface)
                 delta = now - last_check
                 download_speed = (recv - last_recv) / delta
