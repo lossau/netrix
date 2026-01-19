@@ -37,6 +37,25 @@ def format_speed(bps):
     return f"{bps:.1f} TB/s"
 
 
+def get_hud_position(hud_position, height, width, hud_width):
+    """Calculate HUD position based on position setting."""
+    if hud_position == "top_right":
+        return 0, width - hud_width - 1
+    elif hud_position == "top_left":
+        return 0, 1
+    elif hud_position == "bottom_right":
+        return height - 2, width - hud_width - 1
+    elif hud_position == "bottom_left":
+        return height - 2, 1
+    elif hud_position == "center":
+        # Center vertically, accounting for 2-line HUD
+        center_y = max(0, (height - 2) // 2)
+        center_x = max(1, (width - hud_width) // 2)
+        return center_y, center_x
+    else:
+        return 0, width - hud_width - 1  # Default to top_right
+
+
 def draw_help_overlay(stdscr, height, width):
     """Draw a help overlay showing available commands."""
     help_lines = [
@@ -47,6 +66,8 @@ def draw_help_overlay(stdscr, height, width):
         "  d  - Cycle download color",
         "  u  - Cycle upload color",
         "  c  - Cycle both colors",
+        "  m  - Toggle numeric meter",
+        "  p  - Change meter position",
         "",
         "Press 'h' to close",
     ]
@@ -270,6 +291,8 @@ def main(stdscr):
     download_color_index = 0
     upload_color_index = 1
     hud_visible = True
+    hud_positions = ["top_right", "top_left", "bottom_right", "bottom_left", "center"]
+    hud_position_index = 3  # Start at bottom_left
     help_overlay_visible = False
     startup_message_visible = True
     startup_message_start_time = time.time()
@@ -385,8 +408,9 @@ def main(stdscr):
                 up_str = f"↑ {format_speed(upload_speed)}"
                 down_str = f"↓ {format_speed(download_speed)}"
                 hud_width = max(len(up_str), len(down_str))
-                start_x = width - hud_width - 1
-                hud_y = 0
+                hud_y, start_x = get_hud_position(
+                    hud_positions[hud_position_index], height, width, hud_width
+                )
                 try:
                     stdscr.addstr(
                         hud_y,
@@ -455,6 +479,10 @@ def main(stdscr):
                         COLOR_THEMES
                     )
                     upload_color_index = (upload_color_index + 1) % len(COLOR_THEMES)
+                elif key == ord("m"):
+                    hud_visible = not hud_visible
+                elif key == ord("p"):
+                    hud_position_index = (hud_position_index + 1) % len(hud_positions)
 
             time.sleep(FRAME_DELAY)
         except curses.error:
