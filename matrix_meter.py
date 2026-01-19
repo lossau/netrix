@@ -414,27 +414,15 @@ def main(stdscr):
                 try:
                     stdscr.addstr(
                         hud_y,
-                        start_x,
-                        "↑",
+                        start_x + 1,
+                        f"↑ {format_speed(upload_speed)}",
                         curses.color_pair(upload_color_index + 1) | curses.A_BOLD,
                     )
                     stdscr.addstr(
-                        hud_y,
-                        start_x + 1,
-                        f" {format_speed(upload_speed)}",
-                        curses.A_BOLD,
-                    )
-                    stdscr.addstr(
                         hud_y + 1,
-                        start_x,
-                        "↓",
+                        start_x + 1,
+                        f"↓ {format_speed(download_speed)}",
                         curses.color_pair(download_color_index + 1) | curses.A_BOLD,
-                    )
-                    stdscr.addstr(
-                        hud_y + 1,
-                        start_x + 1,
-                        f" {format_speed(download_speed)}",
-                        curses.A_BOLD,
                     )
                 except curses.error:
                     pass
