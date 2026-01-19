@@ -5,6 +5,16 @@ import psutil
 
 
 CHARS = '日ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ012345789Z:・."=*+-<>¦｜╌ｸ'
+
+# Constants
+FRAME_DELAY = 0.05
+DENSITY_SMOOTHING = 0.2
+SPEED_DIVISOR = 10_000  # Divisor for converting bytes/s to column density
+BASE_DENSITY_FACTOR = 0.05  # Base density as fraction of screen width
+STARTUP_MESSAGE_DURATION = 3.0  # Seconds to show startup message
+BOLD_PROBABILITY = 0.1  # Probability of bold character in trail
+FADE_THRESHOLD = 0.66  # Fade threshold for trail brightness
+
 COLOR_THEMES = [
     (curses.COLOR_GREEN, curses.COLOR_BLACK),
     (curses.COLOR_CYAN, curses.COLOR_BLACK),
@@ -21,6 +31,8 @@ COLOR_THEMES = [
 
 def get_main_interface():
     counters = psutil.net_io_counters(pernic=True)
+    if not counters:
+        raise RuntimeError("No network interfaces found")
     return max(counters, key=lambda k: counters[k].bytes_recv + counters[k].bytes_sent)
 
 
@@ -31,9 +43,9 @@ def get_network_io(interface):
 
 def format_speed(bps):
     for unit in ["B/s", "KB/s", "MB/s", "GB/s"]:
-        if bps < 1024:
+        if bps < 1024.0:
             return f"{bps:.1f} {unit}"
-        bps /= 1024
+        bps /= 1024.0
     return f"{bps:.1f} TB/s"
 
 
@@ -170,6 +182,7 @@ class Column:
         self.height = height
         self.trail_chars = []  # Store characters for each position in the trail
         self.trail_timers = []  # Track when each character should change
+        self.frame_counter = 0  # Initialize frame_counter to fix linter warning
         self.reset()
 
     def reset(self):
@@ -226,7 +239,14 @@ class Column:
 
     def cleanup(self, stdscr):
         # Clear only the positions that were previously occupied
-        for y in range(self.y, self.y + self.trail):
+        # Handle both downward and upward streams correctly
+        if self.direction == "down":
+            start_y = self.y
+            end_y = self.y + self.trail
+        else:
+            start_y = self.y - self.trail + 1
+            end_y = self.y + 1
+        for y in range(start_y, end_y):
             if 0 <= y < self.height:
                 try:
                     stdscr.addstr(y, self.x, " ")
@@ -249,7 +269,7 @@ class Column:
             y = self.y - offset if self.direction == "down" else self.y + offset
             if 0 <= y < self.height:
                 char = self.trail_chars[i]
-                attr = curses.A_BOLD if random.random() < 0.1 else 0
+                attr = curses.A_BOLD if random.random() < BOLD_PROBABILITY else 0
                 # Reverse fade calculation for upward streams
                 fade_i = i if self.direction == "down" else self.trail - 1 - i
                 fade = (
@@ -258,7 +278,8 @@ class Column:
                 color = (
                     head_color
                     if fade_i == 0
-                    else trail_color | (curses.A_BOLD if fade > 0.66 else curses.A_DIM)
+                    else trail_color
+                    | (curses.A_BOLD if fade > FADE_THRESHOLD else curses.A_DIM)
                 )
                 try:
                     stdscr.addstr(y, self.x, char, color | attr)
@@ -296,10 +317,7 @@ def main(stdscr):
     help_overlay_visible = False
     startup_message_visible = True
     startup_message_start_time = time.time()
-    STARTUP_MESSAGE_DURATION = 3.0  # Show for 3 seconds
 
-    FRAME_DELAY = 0.05
-    DENSITY_SMOOTHING = 0.2
     down_target = up_target = 0.0
     columns = []
 
@@ -310,7 +328,7 @@ def main(stdscr):
                 time.sleep(FRAME_DELAY)
                 continue
 
-            base_density = int(width * 0.05)  # Add back base_density calculation
+            base_density = int(width * BASE_DENSITY_FACTOR)
 
             if len(columns) != width:
                 columns = [Column(x, height) for x in range(width)]
@@ -329,15 +347,27 @@ def main(stdscr):
                     startup_message_visible = False
 
             if now - last_check >= 1:
-                recv, sent = get_network_io(interface)
-                delta = now - last_check
-                download_speed = (recv - last_recv) / delta
-                upload_speed = (sent - last_sent) / delta
-                last_recv, last_sent = recv, sent
-                last_check = now
+                try:
+                    recv, sent = get_network_io(interface)
+                    delta = now - last_check
+                    download_speed = (recv - last_recv) / delta
+                    upload_speed = (sent - last_sent) / delta
+                    last_recv, last_sent = recv, sent
+                    last_check = now
+                except (KeyError, AttributeError):
+                    # Interface may have disappeared, try to get a new one
+                    try:
+                        interface = get_main_interface()
+                        last_recv, last_sent = get_network_io(interface)
+                        last_check = now
+                    except (RuntimeError, KeyError):
+                        # No interfaces available, keep using last known speeds
+                        pass
 
-            raw_down = min(width, max(base_density, int(download_speed / 10_000)))
-            raw_up = min(width, max(base_density, int(upload_speed / 10_000)))
+            raw_down = min(
+                width, max(base_density, int(download_speed / SPEED_DIVISOR))
+            )
+            raw_up = min(width, max(base_density, int(upload_speed / SPEED_DIVISOR)))
             down_target += DENSITY_SMOOTHING * (raw_down - down_target)
             up_target += DENSITY_SMOOTHING * (raw_up - up_target)
 
@@ -373,36 +403,7 @@ def main(stdscr):
                         if col.direction == "down"
                         else upload_color_index
                     )
-                    trail_color = curses.color_pair(color_index + 1)
-                    head_color = curses.color_pair(color_index + 11)
-
-                    # Draw visible trail
-                    for i in range(col.trail):
-                        offset = i if col.direction == "down" else -i
-                        y = (
-                            col.y - offset
-                            if col.direction == "down"
-                            else col.y + offset
-                        )
-                        if 0 <= y < height:
-                            char = col.trail_chars[i]
-                            attr = curses.A_BOLD if random.random() < 0.1 else 0
-                            # Reverse fade calculation for upward streams
-                            fade_i = i if col.direction == "down" else col.trail - 1 - i
-                            fade = (
-                                max(0, Column.TRAIL_FADE_LEVELS - fade_i)
-                                / Column.TRAIL_FADE_LEVELS
-                            )
-                            color = (
-                                head_color
-                                if fade_i == 0
-                                else trail_color
-                                | (curses.A_BOLD if fade > 0.66 else curses.A_DIM)
-                            )
-                            try:
-                                stdscr.addstr(y, col.x, char, color | attr)
-                            except curses.error:
-                                pass
+                    col.draw(stdscr, color_index)
 
             if hud_visible:
                 up_str = f"{format_speed(upload_speed)} ↑"
