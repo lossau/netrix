@@ -405,8 +405,8 @@ def main(stdscr):
                                 pass
 
             if hud_visible:
-                up_str = f"↑ {format_speed(upload_speed)}"
-                down_str = f"↓ {format_speed(download_speed)}"
+                up_str = f"{format_speed(upload_speed)} ↑"
+                down_str = f"{format_speed(download_speed)} ↓"
                 hud_width = max(len(up_str), len(down_str))
                 hud_y, start_x = get_hud_position(
                     hud_positions[hud_position_index], height, width, hud_width
@@ -415,13 +415,13 @@ def main(stdscr):
                     stdscr.addstr(
                         hud_y,
                         start_x + 1,
-                        f"↑ {format_speed(upload_speed)}",
+                        up_str,
                         curses.color_pair(upload_color_index + 1) | curses.A_BOLD,
                     )
                     stdscr.addstr(
                         hud_y + 1,
                         start_x + 1,
-                        f"↓ {format_speed(download_speed)}",
+                        down_str,
                         curses.color_pair(download_color_index + 1) | curses.A_BOLD,
                     )
                 except curses.error:
