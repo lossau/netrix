@@ -50,15 +50,15 @@ def draw_help_overlay(stdscr, height, width):
         "",
         "Press 'h' to close",
     ]
-    
+
     # Calculate overlay dimensions
     overlay_height = len(help_lines) + 2
     overlay_width = max(len(line) for line in help_lines) + 4
-    
+
     # Center the overlay
     start_y = (height - overlay_height) // 2
     start_x = (width - overlay_width) // 2
-    
+
     # Ensure overlay fits on screen
     if start_y < 0:
         start_y = 0
@@ -68,7 +68,7 @@ def draw_help_overlay(stdscr, height, width):
         overlay_height = height - start_y
     if start_x + overlay_width > width:
         overlay_width = width - start_x
-    
+
     # Draw border
     try:
         # Top and bottom borders
@@ -122,7 +122,7 @@ def draw_help_overlay(stdscr, height, width):
             )
     except curses.error:
         pass
-    
+
     # Draw help text
     text_start_y = start_y + 1
     text_start_x = start_x + 2
@@ -271,6 +271,9 @@ def main(stdscr):
     upload_color_index = 1
     hud_visible = True
     help_overlay_visible = False
+    startup_message_visible = True
+    startup_message_start_time = time.time()
+    STARTUP_MESSAGE_DURATION = 3.0  # Show for 3 seconds
 
     FRAME_DELAY = 0.05
     DENSITY_SMOOTHING = 0.2
@@ -296,6 +299,12 @@ def main(stdscr):
             stdscr.erase()  # Use erase() instead of clear() for less flicker
 
             now = time.time()
+
+            # Check if startup message should still be visible
+            if startup_message_visible:
+                if now - startup_message_start_time >= STARTUP_MESSAGE_DURATION:
+                    startup_message_visible = False
+
             if now - last_check >= 0.5:
                 recv, sent = get_network_io(interface)
                 delta = now - last_check
@@ -409,6 +418,21 @@ def main(stdscr):
             if help_overlay_visible:
                 draw_help_overlay(stdscr, height, width)
 
+            if startup_message_visible:
+                message = "Press 'h' for help"
+                message_x = (width - len(message)) // 2
+                message_y = height - 1
+                if message_x >= 0 and message_y >= 0:
+                    try:
+                        stdscr.addstr(
+                            message_y,
+                            message_x,
+                            message,
+                            curses.color_pair(7) | curses.A_BOLD,
+                        )
+                    except curses.error:
+                        pass
+
             stdscr.refresh()
 
             key = stdscr.getch()
@@ -417,6 +441,9 @@ def main(stdscr):
                     break
                 elif key == ord("h"):
                     help_overlay_visible = not help_overlay_visible
+                    startup_message_visible = (
+                        False  # Hide startup message when help is toggled
+                    )
                 elif key == ord("d"):
                     download_color_index = (download_color_index + 1) % len(
                         COLOR_THEMES
