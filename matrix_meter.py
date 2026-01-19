@@ -37,6 +37,110 @@ def format_speed(bps):
     return f"{bps:.1f} TB/s"
 
 
+def draw_help_overlay(stdscr, height, width):
+    """Draw a help overlay showing available commands."""
+    help_lines = [
+        "Commands:",
+        "",
+        "  q  - Quit",
+        "  h  - Toggle this help",
+        "  d  - Cycle download color",
+        "  u  - Cycle upload color",
+        "  c  - Cycle both colors",
+        "",
+        "Press 'h' to close",
+    ]
+    
+    # Calculate overlay dimensions
+    overlay_height = len(help_lines) + 2
+    overlay_width = max(len(line) for line in help_lines) + 4
+    
+    # Center the overlay
+    start_y = (height - overlay_height) // 2
+    start_x = (width - overlay_width) // 2
+    
+    # Ensure overlay fits on screen
+    if start_y < 0:
+        start_y = 0
+    if start_x < 0:
+        start_x = 0
+    if start_y + overlay_height > height:
+        overlay_height = height - start_y
+    if start_x + overlay_width > width:
+        overlay_width = width - start_x
+    
+    # Draw border
+    try:
+        # Top and bottom borders
+        for x in range(start_x + 1, min(start_x + overlay_width - 1, width - 1)):
+            if start_y < height:
+                stdscr.addstr(start_y, x, "─", curses.color_pair(7) | curses.A_BOLD)
+            if start_y + overlay_height - 1 < height:
+                stdscr.addstr(
+                    start_y + overlay_height - 1,
+                    x,
+                    "─",
+                    curses.color_pair(7) | curses.A_BOLD,
+                )
+        # Left and right borders
+        for y in range(start_y + 1, min(start_y + overlay_height - 1, height - 1)):
+            if start_x < width:
+                stdscr.addstr(y, start_x, "│", curses.color_pair(7) | curses.A_BOLD)
+            if start_x + overlay_width - 1 < width:
+                stdscr.addstr(
+                    y,
+                    start_x + overlay_width - 1,
+                    "│",
+                    curses.color_pair(7) | curses.A_BOLD,
+                )
+        # Corners
+        if start_y < height and start_x < width:
+            stdscr.addstr(start_y, start_x, "┌", curses.color_pair(7) | curses.A_BOLD)
+        if start_y < height and start_x + overlay_width - 1 < width:
+            stdscr.addstr(
+                start_y,
+                start_x + overlay_width - 1,
+                "┐",
+                curses.color_pair(7) | curses.A_BOLD,
+            )
+        if start_y + overlay_height - 1 < height and start_x < width:
+            stdscr.addstr(
+                start_y + overlay_height - 1,
+                start_x,
+                "└",
+                curses.color_pair(7) | curses.A_BOLD,
+            )
+        if (
+            start_y + overlay_height - 1 < height
+            and start_x + overlay_width - 1 < width
+        ):
+            stdscr.addstr(
+                start_y + overlay_height - 1,
+                start_x + overlay_width - 1,
+                "┘",
+                curses.color_pair(7) | curses.A_BOLD,
+            )
+    except curses.error:
+        pass
+    
+    # Draw help text
+    text_start_y = start_y + 1
+    text_start_x = start_x + 2
+    for i, line in enumerate(help_lines):
+        y = text_start_y + i
+        if y >= height - 1:
+            break
+        try:
+            stdscr.addstr(
+                y,
+                text_start_x,
+                line[: overlay_width - 4],
+                curses.color_pair(7) | curses.A_BOLD,
+            )
+        except curses.error:
+            pass
+
+
 class Column:
     TRAIL_FADE_LEVELS = 5
 
@@ -166,6 +270,7 @@ def main(stdscr):
     download_color_index = 0
     upload_color_index = 1
     hud_visible = True
+    help_overlay_visible = False
 
     FRAME_DELAY = 0.05
     DENSITY_SMOOTHING = 0.2
@@ -301,6 +406,9 @@ def main(stdscr):
                 except curses.error:
                     pass
 
+            if help_overlay_visible:
+                draw_help_overlay(stdscr, height, width)
+
             stdscr.refresh()
 
             key = stdscr.getch()
@@ -308,7 +416,7 @@ def main(stdscr):
                 if key == ord("q"):
                     break
                 elif key == ord("h"):
-                    hud_visible = not hud_visible
+                    help_overlay_visible = not help_overlay_visible
                 elif key == ord("d"):
                     download_color_index = (download_color_index + 1) % len(
                         COLOR_THEMES
