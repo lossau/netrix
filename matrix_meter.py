@@ -288,8 +288,8 @@ def main(stdscr):
     last_check = time.time()
 
     download_speed = upload_speed = 0
-    download_color_index = 0
-    upload_color_index = 1
+    download_color_index = 0  # Green
+    upload_color_index = 4  # Red
     hud_visible = True
     hud_positions = ["top_right", "top_left", "bottom_right", "bottom_left", "center"]
     hud_position_index = 3  # Start at bottom_left
