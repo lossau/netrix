@@ -44,9 +44,9 @@ def get_network_io(interface):
 def format_speed(bps):
     for unit in ["B/s", "KB/s", "MB/s", "GB/s"]:
         if bps < 1024.0:
-            return f"{bps:.1f} {unit}"
+            return f"{int(bps)} {unit}"
         bps /= 1024.0
-    return f"{bps:.1f} TB/s"
+    return f"{int(bps)} TB/s"
 
 
 def get_hud_position(hud_position, height, width, hud_width):
