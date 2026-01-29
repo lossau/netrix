@@ -7,7 +7,7 @@ streams, and upload traffic as upward streams. The density of streams
 corresponds to the network activity level.
 
 Usage:
-    python matrix_meter.py
+    python netrix.py
 
 Controls:
     q - Quit
