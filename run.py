@@ -7,7 +7,7 @@ streams, and upload traffic as upward streams. The density of streams
 corresponds to the network activity level.
 
 Usage:
-    python netrix.py
+    python run.py
 
 Controls:
     q - Quit
@@ -25,8 +25,8 @@ import time
 import psutil
 
 
-# Character set used for the Matrix effect (Japanese katakana, numbers, symbols)
-CHARS = '日ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ012345789Z:・."=*+-<>¦｜╌ｸ'
+# Halfwidth / ASCII only — fullwidth glyphs corrupt curses column layout
+CHARS = 'ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍｸ0123456789Z:."=*+-<>¦|'
 
 # Animation and rendering constants
 FRAME_DELAY = 0.05  # Delay between frames in seconds (20 FPS)
@@ -37,31 +37,50 @@ STARTUP_MESSAGE_DURATION = 3.0  # Seconds to show startup message
 BOLD_PROBABILITY = 0.1  # Probability of bold character in trail (10%)
 FADE_THRESHOLD = 0.66  # Fade threshold for trail brightness (66%)
 
-# Color themes: (foreground, background) pairs for stream visualization
-# Background is typically ignored (uses terminal default)
+# Foreground colors for stream themes (background always terminal default)
 COLOR_THEMES = [
-    (curses.COLOR_GREEN, curses.COLOR_BLACK),
-    (curses.COLOR_CYAN, curses.COLOR_BLACK),
-    (curses.COLOR_YELLOW, curses.COLOR_BLACK),
-    (curses.COLOR_MAGENTA, curses.COLOR_BLACK),
-    (curses.COLOR_RED, curses.COLOR_BLACK),
-    (curses.COLOR_BLUE, curses.COLOR_BLACK),
-    (curses.COLOR_WHITE, curses.COLOR_BLACK),
-    (curses.COLOR_GREEN, curses.COLOR_YELLOW),
-    (curses.COLOR_MAGENTA, curses.COLOR_CYAN),
-    (curses.COLOR_CYAN, curses.COLOR_GREEN),
+    curses.COLOR_GREEN,
+    curses.COLOR_CYAN,
+    curses.COLOR_YELLOW,
+    curses.COLOR_MAGENTA,
+    curses.COLOR_RED,
+    curses.COLOR_BLUE,
+    curses.COLOR_WHITE,
 ]
+
+# Interfaces we should not treat as the primary NIC
+_VIRTUAL_IFACE_PREFIXES = (
+    "docker",
+    "br-",
+    "veth",
+    "virbr",
+    "vmnet",
+    "vboxnet",
+    "tun",
+    "tap",
+    "wg",
+    "zt",
+)
+
+
+def _is_loopback(name):
+    return name == "lo" or name.startswith("lo:")
+
+
+def _is_virtual(name):
+    return any(name.startswith(prefix) for prefix in _VIRTUAL_IFACE_PREFIXES)
 
 
 def get_main_interface():
     """
-    Identify the primary network interface based on total traffic.
+    Identify the primary network interface for monitoring.
 
-    The interface with the highest combined bytes received and sent is
-    selected as the main interface for monitoring.
+    Prefers interfaces that are up and not loopback/virtual, then falls back
+    to any non-loopback interface, then any interface. Among candidates, the
+    one with the highest combined bytes received and sent is selected.
 
     Returns:
-        str: Name of the network interface with the most traffic.
+        str: Name of the selected network interface.
 
     Raises:
         RuntimeError: If no network interfaces are found.
@@ -69,7 +88,27 @@ def get_main_interface():
     counters = psutil.net_io_counters(pernic=True)
     if not counters:
         raise RuntimeError("No network interfaces found")
-    return max(counters, key=lambda k: counters[k].bytes_recv + counters[k].bytes_sent)
+
+    stats = psutil.net_if_stats()
+
+    def is_up(name):
+        info = stats.get(name)
+        return info is not None and info.isup
+
+    physical_up = [
+        name
+        for name in counters
+        if not _is_loopback(name) and not _is_virtual(name) and is_up(name)
+    ]
+    non_loopback_up = [
+        name for name in counters if not _is_loopback(name) and is_up(name)
+    ]
+    non_loopback = [name for name in counters if not _is_loopback(name)]
+
+    candidates = physical_up or non_loopback_up or non_loopback or list(counters)
+    return max(
+        candidates, key=lambda k: counters[k].bytes_recv + counters[k].bytes_sent
+    )
 
 
 def get_network_io(interface):
@@ -102,6 +141,7 @@ def format_speed(bps):
     Returns:
         str: Formatted speed string (e.g., "1024 KB/s", "5 MB/s").
     """
+    bps = max(0.0, float(bps))
     for unit in ["B/s", "KB/s", "MB/s", "GB/s"]:
         if bps < 1024.0:
             return f"{int(bps)} {unit}"
@@ -129,23 +169,27 @@ def get_hud_position(hud_position, height, width, hud_width):
 
     Returns:
         tuple: (y, x) coordinates for the HUD position. Defaults to top_right
-            if an invalid position is specified.
+            if an invalid position is specified. Coordinates are clamped so the
+            2-line HUD stays on screen when possible.
     """
+    max_x = max(0, width - hud_width)
+    max_y = max(0, height - 2)
+
     if hud_position == "top_right":
-        return 0, width - hud_width - 1
+        y, x = 0, max_x
     elif hud_position == "top_left":
-        return 0, 1
+        y, x = 0, 0
     elif hud_position == "bottom_right":
-        return height - 2, width - hud_width - 1
+        y, x = max_y, max_x
     elif hud_position == "bottom_left":
-        return height - 2, 1
+        y, x = max_y, 0
     elif hud_position == "center":
-        # Center vertically, accounting for 2-line HUD
-        center_y = max(0, (height - 2) // 2)
-        center_x = max(1, (width - hud_width) // 2)
-        return center_y, center_x
+        y = max_y // 2
+        x = max(0, (width - hud_width) // 2)
     else:
-        return 0, width - hud_width - 1  # Default to top_right
+        y, x = 0, max_x
+
+    return max(0, min(y, max_y)), max(0, min(x, max_x))
 
 
 def draw_help_overlay(stdscr, height, width):
@@ -154,6 +198,7 @@ def draw_help_overlay(stdscr, height, width):
 
     The overlay is centered on the screen with a bordered box containing
     the help text. It automatically adjusts if the screen is too small.
+    The interior stays transparent so the matrix effect shows through.
 
     Args:
         stdscr: Curses window object.
@@ -282,7 +327,6 @@ class Column:
         y (int): Current vertical position of the trail head.
         active (bool): Whether this column is currently active.
         trail_chars (list): Characters displayed in the trail.
-        trail_timers (list): Timers for character change animations.
         frame_counter (int): Counter for speed control.
         start_delay (int): Frames to wait before starting movement.
     """
@@ -299,10 +343,23 @@ class Column:
         """
         self.x = x
         self.height = height
-        self.trail_chars = []  # Store characters for each position in the trail
-        self.trail_timers = []  # Track when each character should change
-        self.frame_counter = 0  # Initialize frame_counter to fix linter warning
+        self.trail_chars = []
+        self.frame_counter = 0
         self.reset()
+
+    def _randomize_trail(self):
+        """Pick a valid trail length and refill trail characters."""
+        min_trail = min(5, max(1, self.height))
+        max_trail = max(min_trail, self.height // 2)
+        self.trail = random.randint(min_trail, max_trail)
+        self.trail_chars = [random.choice(CHARS) for _ in range(self.trail)]
+
+    def _place_offscreen(self):
+        """Position the head so the whole trail starts outside the viewport."""
+        if self.direction == "down":
+            self.y = -self.trail
+        else:
+            self.y = self.height + self.trail
 
     def reset(self):
         """
@@ -313,22 +370,44 @@ class Column:
         activated when needed.
         """
         self.direction = random.choice(["down", "up"])
-        # Ensure trail length is always valid (at least 1, at most height//2, but never less than 5)
-        min_trail = min(5, self.height)
-        max_trail = max(min_trail, self.height // 2)
-        self.trail = random.randint(min_trail, max_trail)
+        self._randomize_trail()
         self.speed = random.randint(1, 3)  # Frames per movement step
         self.frame_counter = 0
-        self.start_delay = random.randint(0, 10)  # Random delay before starting
+        self.start_delay = random.randint(0, 10)
         self.active = False
-        # Position off-screen based on direction
-        if self.direction == "down":
-            self.y = -self.trail  # Start above screen
-        else:
-            self.y = self.height + self.trail  # Start below screen
-        # Initialize trail characters and timers
-        self.trail_chars = [random.choice(CHARS) for _ in range(self.trail)]
-        self.trail_timers = [0 for _ in range(self.trail)]
+        self._place_offscreen()
+
+    def activate(self, direction):
+        """
+        Activate this column as a download or upload stream.
+
+        Args:
+            direction (str): "down" for download, "up" for upload.
+        """
+        self.direction = direction
+        self._randomize_trail()
+        self.speed = random.randint(1, 3)
+        self.frame_counter = 0
+        self.start_delay = random.randint(0, 10)
+        self.active = True
+        self._place_offscreen()
+
+    def set_height(self, height):
+        """
+        Update screen height after a resize, clamping trail geometry.
+
+        Args:
+            height (int): New screen height in characters.
+        """
+        if height == self.height:
+            return
+        self.height = max(1, height)
+        max_trail = max(1, self.height // 2)
+        if self.trail > max_trail:
+            self.trail = max_trail
+            self.trail_chars = self.trail_chars[: self.trail]
+        if not self.active:
+            self._place_offscreen()
 
     def update(self):
         """
@@ -370,52 +449,23 @@ class Column:
         decreasing probability based on their distance from the head,
         creating a more dynamic visual effect.
         """
-        if not self.active:
+        if not self.active or not self.trail_chars:
             return
         # Head always changes for maximum visual activity
         self.trail_chars[0] = random.choice(CHARS)
         # Update trail characters based on their position
         for i in range(1, self.trail):
-            self.trail_timers[i] += 1
             # Change probability decreases with distance from head
-            # (1/2 for position 1, 1/3 for position 2, etc.)
             if random.random() < (1.0 / (i + 1)):
                 self.trail_chars[i] = random.choice(CHARS)
-                self.trail_timers[i] = 0
-
-    def cleanup(self, stdscr):
-        """
-        Clear the previous positions occupied by this column's trail.
-
-        Erases characters from the screen before drawing new ones to prevent
-        ghosting. Handles both downward and upward streams correctly.
-
-        Args:
-            stdscr: Curses window object.
-        """
-        # Clear only the positions that were previously occupied
-        # Handle both downward and upward streams correctly
-        if self.direction == "down":
-            start_y = self.y
-            end_y = self.y + self.trail
-        else:
-            # For upward streams, trail extends backward from head
-            start_y = self.y - self.trail + 1
-            end_y = self.y + 1
-        for y in range(start_y, end_y):
-            if 0 <= y < self.height:
-                try:
-                    stdscr.addstr(y, self.x, " ")
-                except curses.error:
-                    pass
 
     def draw(self, stdscr, color_index):
         """
         Draw the column's trail on the screen.
 
-        Clears previous positions and draws the current trail with appropriate
-        colors and fade effects. The head is brighter, and the trail fades
-        based on distance from the head.
+        The screen is erased each frame by the main loop, so this only draws
+        the current trail. Index 0 is always the head (brightest); the trail
+        fades with distance for both download and upload streams.
 
         Args:
             stdscr: Curses window object.
@@ -424,34 +474,21 @@ class Column:
         if not self.active:
             return
 
-        # Clear previous positions to prevent ghosting
-        self.cleanup(stdscr)
-
-        # Get color pairs (regular and bright for head)
         trail_color = curses.color_pair(color_index + 1)
-        head_color = curses.color_pair(color_index + 11)
 
         for i in range(self.trail):
-            # Calculate screen position based on direction
-            offset = i if self.direction == "down" else -i
-            y = self.y - offset if self.direction == "down" else self.y + offset
+            # Head at self.y; trail extends opposite to movement
+            y = self.y - i if self.direction == "down" else self.y + i
             if 0 <= y < self.height:
                 char = self.trail_chars[i]
-                # Randomly make some characters bold for visual interest
                 attr = curses.A_BOLD if random.random() < BOLD_PROBABILITY else 0
-                # Reverse fade calculation for upward streams
-                # (head should always be brightest)
-                fade_i = i if self.direction == "down" else self.trail - 1 - i
-                fade = (
-                    max(0, Column.TRAIL_FADE_LEVELS - fade_i) / Column.TRAIL_FADE_LEVELS
-                )
-                # Head uses bright color, trail fades based on distance
-                color = (
-                    head_color
-                    if fade_i == 0
-                    else trail_color
-                    | (curses.A_BOLD if fade > FADE_THRESHOLD else curses.A_DIM)
-                )
+                fade = max(0, Column.TRAIL_FADE_LEVELS - i) / Column.TRAIL_FADE_LEVELS
+                if i == 0:
+                    color = trail_color | curses.A_BOLD
+                else:
+                    color = trail_color | (
+                        curses.A_BOLD if fade > FADE_THRESHOLD else curses.A_DIM
+                    )
                 try:
                     stdscr.addstr(y, self.x, char, color | attr)
                 except curses.error:
@@ -481,12 +518,9 @@ def main(stdscr):
     stdscr.idlok(True)  # Enable insert/delete line
     stdscr.leaveok(True)  # Cursor can leave window
 
-    # Initialize color pairs for each theme
-    # Pairs 1-10: regular trail colors
-    # Pairs 11-20: bright head colors (same colors, brighter)
-    for i, (fg, _) in enumerate(COLOR_THEMES):
-        curses.init_pair(i + 1, fg, -1)  # Regular color
-        curses.init_pair(i + 11, fg, -1)  # Bright color (same, but used differently)
+    # One color pair per theme; head brightness comes from A_BOLD
+    for i, fg in enumerate(COLOR_THEMES):
+        curses.init_pair(i + 1, fg, -1)
 
     # Initialize network monitoring
     interface = get_main_interface()
@@ -494,7 +528,7 @@ def main(stdscr):
     last_check = time.time()
 
     # Application state
-    download_speed = upload_speed = 0
+    download_speed = upload_speed = 0.0
     download_color_index = 0  # Green (first theme)
     upload_color_index = 4  # Red (fifth theme)
     hud_visible = True
@@ -524,9 +558,8 @@ def main(stdscr):
             if len(columns) != width:
                 columns = [Column(x, height) for x in range(width)]
             else:
-                # Update height for existing columns
                 for col in columns:
-                    col.height = height
+                    col.set_height(height)
 
             # Clear the entire screen at the start of each frame
             # Use erase() instead of clear() for less flicker
@@ -544,8 +577,12 @@ def main(stdscr):
                 try:
                     recv, sent = get_network_io(interface)
                     delta = now - last_check
-                    download_speed = (recv - last_recv) / delta
-                    upload_speed = (sent - last_sent) / delta
+                    # Counter reset (NIC reconnect) — recalibrate without a spike
+                    if recv < last_recv or sent < last_sent:
+                        download_speed = upload_speed = 0.0
+                    else:
+                        download_speed = max(0.0, (recv - last_recv) / delta)
+                        upload_speed = max(0.0, (sent - last_sent) / delta)
                     last_recv, last_sent = recv, sent
                     last_check = now
                 except (KeyError, AttributeError):
@@ -554,6 +591,7 @@ def main(stdscr):
                         interface = get_main_interface()
                         last_recv, last_sent = get_network_io(interface)
                         last_check = now
+                        download_speed = upload_speed = 0.0
                     except (RuntimeError, KeyError):
                         # No interfaces available, keep using last known speeds
                         pass
@@ -572,31 +610,28 @@ def main(stdscr):
             down_active = sum(1 for c in columns if c.active and c.direction == "down")
             up_active = sum(1 for c in columns if c.active and c.direction == "up")
 
-            # Randomly activate more columns up to target density
+            # Activate any inactive column and assign direction (avoids ~50% cap)
             if down_active < int(down_target):
-                available = [
-                    c for c in columns if not c.active and c.direction == "down"
-                ]
+                available = [c for c in columns if not c.active]
                 to_activate = random.sample(
                     available, min(len(available), int(down_target) - down_active)
                 )
                 for c in to_activate:
-                    c.active = True
+                    c.activate("down")
 
             if up_active < int(up_target):
-                available = [c for c in columns if not c.active and c.direction == "up"]
+                available = [c for c in columns if not c.active]
                 to_activate = random.sample(
                     available, min(len(available), int(up_target) - up_active)
                 )
                 for c in to_activate:
-                    c.active = True
+                    c.activate("up")
 
             # Update and draw all columns
             for col in columns:
                 col.update()
-                col.update_chars()  # Update characters before drawing
+                col.update_chars()
                 if col.active:
-                    # Select color based on direction (down=download, up=upload)
                     color_index = (
                         download_color_index
                         if col.direction == "down"
@@ -615,13 +650,13 @@ def main(stdscr):
                 try:
                     stdscr.addstr(
                         hud_y,
-                        start_x + 1,
+                        start_x,
                         up_str,
                         curses.color_pair(upload_color_index + 1) | curses.A_BOLD,
                     )
                     stdscr.addstr(
                         hud_y + 1,
-                        start_x + 1,
+                        start_x,
                         down_str,
                         curses.color_pair(download_color_index + 1) | curses.A_BOLD,
                     )
@@ -656,9 +691,7 @@ def main(stdscr):
                     break
                 elif key == ord("h"):
                     help_overlay_visible = not help_overlay_visible
-                    startup_message_visible = (
-                        False  # Hide startup message when help is toggled
-                    )
+                    startup_message_visible = False
                 elif key == ord("d"):
                     download_color_index = (download_color_index + 1) % len(
                         COLOR_THEMES
